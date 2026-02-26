@@ -1,6 +1,6 @@
 #pragma once
 #include <JuceHeader.h>
-#include "SynthVoice.h"
+#include "UnisonSynthesiser.h"
 
 class SynthPluginAudioProcessor : public juce::AudioProcessor
 {
@@ -36,9 +36,10 @@ public:
     juce::AudioProcessorValueTreeState apvts;
 
 private:
-    static constexpr int NUM_VOICES = 8;
+    static constexpr int NUM_VOICES = 16;
 
-    juce::Synthesiser synth;
+    UnisonSynthesiser synth;
+    int currentProgram = 0;
 
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
     void updateVoiceParameters();

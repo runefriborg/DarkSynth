@@ -4,13 +4,14 @@
 // Parameters passed from processor to each voice each block
 struct SynthParams
 {
-    int   waveform        = 0;     // 0=Sine 1=Saw 2=Square 3=Triangle
+    int   waveform        = 0;     // 0=Sine 1=Saw 2=Square 3=Triangle 4=SuperSaw
     float attack          = 0.1f;
     float decay           = 0.1f;
     float sustain         = 0.8f;
     float release         = 0.5f;
     float filterCutoff    = 2000.0f;
     float filterResonance = 0.7f;
+    float superSawDetune  = 0.3f;
 };
 
 // ---- Sound (trivial – every note plays every sound) ----
@@ -32,6 +33,9 @@ public:
     void startNote (int midiNoteNumber, float velocity,
                     juce::SynthesiserSound*, int currentPitchWheelPosition) override;
 
+    // Called by UnisonSynthesiser before startNote to set per-voice pitch offset
+    void setUnisonDetuneOffset (float semitones) noexcept { unisonDetuneOffset = semitones; }
+
     void stopNote (float velocity, bool allowTailOff) override;
 
     void pitchWheelMoved (int)  override {}
@@ -50,6 +54,15 @@ private:
     double phaseDelta   = 0.0;
     float  level        = 0.0f;
     int    waveform     = 0;
+
+    float  unisonDetuneOffset = 0.0f;  // set by UnisonSynthesiser before startNote
+
+    // SuperSaw: 7 detuned oscillators (JP-8000 model)
+    static constexpr int kNumSuperSawOscs = 7;
+    double superSawPhases[kNumSuperSawOscs] {};
+    double superSawDeltas[kNumSuperSawOscs] {};
+    float  superSawDetune = 0.3f;
+    double baseFrequency  = 440.0;
 
     juce::ADSR                               adsr;
     juce::ADSR::Parameters                   adsrParams;

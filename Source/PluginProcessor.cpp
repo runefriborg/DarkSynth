@@ -1,6 +1,30 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
+//==============================================================================
+// Factory presets
+//==============================================================================
+namespace {
+    struct Preset {
+        const char* name;
+        float waveform, attack, decay, sustain, release;
+        float filterCutoff, filterResonance, volume;
+        float superSawDetune, unisonVoices, unisonDetune;
+    };
+
+    constexpr Preset kPresets[] = {
+        //  name             wave  att    dec    sus    rel    cutoff   res   vol   ssDet  uniV  uniDet
+        { "Init",            0,  0.050f, 0.100f, 0.800f, 0.400f,  5000.f, 0.70f, 0.70f, 0.30f, 1.f, 0.10f },
+        { "SuperSaw Pad",    4,  0.300f, 0.200f, 0.850f, 1.500f,  7000.f, 0.40f, 0.65f, 0.60f, 4.f, 0.12f },
+        { "Saw Lead",        1,  0.005f, 0.100f, 0.700f, 0.150f,  6000.f, 1.20f, 0.70f, 0.30f, 1.f, 0.00f },
+        { "Bass Pluck",      2,  0.001f, 0.400f, 0.000f, 0.200f,   800.f, 2.00f, 0.75f, 0.30f, 1.f, 0.00f },
+        { "Ambient Drift",   0,  2.000f, 0.300f, 0.700f, 3.000f,  2500.f, 0.50f, 0.60f, 0.30f, 2.f, 0.25f },
+    };
+
+    constexpr int kNumPresets = (int) std::size (kPresets);
+}
+
+//==============================================================================
 SynthPluginAudioProcessor::SynthPluginAudioProcessor()
     : AudioProcessor (BusesProperties()
                           .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
@@ -20,11 +44,41 @@ bool  SynthPluginAudioProcessor::acceptsMidi()  const              { return true
 bool  SynthPluginAudioProcessor::producesMidi() const              { return false; }
 bool  SynthPluginAudioProcessor::isMidiEffect() const              { return false; }
 double SynthPluginAudioProcessor::getTailLengthSeconds() const     { return 2.0; }
-int   SynthPluginAudioProcessor::getNumPrograms()                  { return 1; }
-int   SynthPluginAudioProcessor::getCurrentProgram()               { return 0; }
-void  SynthPluginAudioProcessor::setCurrentProgram (int)           {}
-const juce::String SynthPluginAudioProcessor::getProgramName (int) { return {}; }
-void  SynthPluginAudioProcessor::changeProgramName (int, const juce::String&) {}
+
+int  SynthPluginAudioProcessor::getNumPrograms()    { return kNumPresets; }
+int  SynthPluginAudioProcessor::getCurrentProgram() { return currentProgram; }
+void SynthPluginAudioProcessor::changeProgramName (int, const juce::String&) {}
+
+const juce::String SynthPluginAudioProcessor::getProgramName (int index)
+{
+    if (index < 0 || index >= kNumPresets) return {};
+    return kPresets[index].name;
+}
+
+void SynthPluginAudioProcessor::setCurrentProgram (int index)
+{
+    if (index < 0 || index >= kNumPresets) return;
+    currentProgram = index;
+
+    const auto& p = kPresets[index];
+
+    auto setP = [this] (const char* id, float v) {
+        if (auto* param = apvts.getParameter (id))
+            param->setValueNotifyingHost (param->convertTo0to1 (v));
+    };
+
+    setP ("waveform",        p.waveform);
+    setP ("attack",          p.attack);
+    setP ("decay",           p.decay);
+    setP ("sustain",         p.sustain);
+    setP ("release",         p.release);
+    setP ("filterCutoff",    p.filterCutoff);
+    setP ("filterResonance", p.filterResonance);
+    setP ("volume",          p.volume);
+    setP ("superSawDetune",  p.superSawDetune);
+    setP ("unisonVoices",    p.unisonVoices);
+    setP ("unisonDetune",    p.unisonDetune);
+}
 
 //==============================================================================
 void SynthPluginAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
@@ -56,6 +110,7 @@ void SynthPluginAudioProcessor::updateVoiceParameters()
     p.release         = apvts.getRawParameterValue ("release")->load();
     p.filterCutoff    = apvts.getRawParameterValue ("filterCutoff")->load();
     p.filterResonance = apvts.getRawParameterValue ("filterResonance")->load();
+    p.superSawDetune  = apvts.getRawParameterValue ("superSawDetune")->load();
 
     for (int i = 0; i < synth.getNumVoices(); ++i)
         if (auto* v = dynamic_cast<SynthVoice*> (synth.getVoice (i)))
@@ -67,6 +122,10 @@ void SynthPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 {
     juce::ScopedNoDenormals noDenormals;
     buffer.clear();
+
+    // Push unison settings to the synthesiser (take effect on the next note-on)
+    synth.numUnisonVoices       = juce::roundToInt (apvts.getRawParameterValue ("unisonVoices")->load());
+    synth.unisonDetuneSemitones = apvts.getRawParameterValue ("unisonDetune")->load();
 
     updateVoiceParameters();
     synth.renderNextBlock (buffer, midi, 0, buffer.getNumSamples());
@@ -105,9 +164,9 @@ SynthPluginAudioProcessor::createParameterLayout()
 {
     juce::AudioProcessorValueTreeState::ParameterLayout layout;
 
-    // Waveform: 0=Sine 1=Saw 2=Square 3=Triangle
+    // Waveform: 0=Sine 1=Saw 2=Square 3=Triangle 4=SuperSaw
     layout.add (std::make_unique<juce::AudioParameterInt> (
-        "waveform", "Waveform", 0, 3, 0));
+        "waveform", "Waveform", 0, 4, 0));
 
     layout.add (std::make_unique<juce::AudioParameterFloat> (
         "attack", "Attack",
@@ -136,6 +195,18 @@ SynthPluginAudioProcessor::createParameterLayout()
     layout.add (std::make_unique<juce::AudioParameterFloat> (
         "volume", "Volume",
         juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.7f));
+
+    layout.add (std::make_unique<juce::AudioParameterFloat> (
+        "superSawDetune", "SuperSaw Detune",
+        juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.3f));
+
+    layout.add (std::make_unique<juce::AudioParameterFloat> (
+        "unisonVoices", "Unison Voices",
+        juce::NormalisableRange<float> (1.0f, 4.0f, 1.0f), 1.0f));
+
+    layout.add (std::make_unique<juce::AudioParameterFloat> (
+        "unisonDetune", "Unison Detune",
+        juce::NormalisableRange<float> (0.0f, 0.5f, 0.001f), 0.1f));
 
     return layout;
 }
