@@ -16,42 +16,34 @@ SynthPluginAudioProcessorEditor::SynthPluginAudioProcessorEditor (SynthPluginAud
     waveformLabel.setColour (juce::Label::textColourId, kAccent);
     addAndMakeVisible (waveformLabel);
 
-    waveformBox.addItem ("Sine",     1);
-    waveformBox.addItem ("Sawtooth", 2);
-    waveformBox.addItem ("Square",   3);
-    waveformBox.addItem ("Triangle", 4);
-    waveformBox.addItem ("SuperSaw", 5);
+    waveformBox.addItem ("Pure",  1);
+    waveformBox.addItem ("Soft",  2);
+    waveformBox.addItem ("Warm",  3);
+    waveformBox.addItem ("Punch", 4);
+    waveformBox.addItem ("Grit",  5);
     addAndMakeVisible (waveformBox);
 
-    // ComboBoxAttachment maps item index (0-based) → parameter value via convertTo0to1
     waveformAtt = std::make_unique<ComboAttach> (audioProcessor.apvts, "waveform", waveformBox);
 
     // ---- Knobs ----
-    setupKnob (superSawDetuneSlider, superSawDetuneLabel, "DETUNE");
-    setupKnob (attackSlider,         attackLabel,         "ATTACK");
-    setupKnob (decaySlider,          decayLabel,          "DECAY");
-    setupKnob (sustainSlider,        sustainLabel,        "SUSTAIN");
-    setupKnob (releaseSlider,        releaseLabel,        "RELEASE");
-    setupKnob (filterCutoffSlider,   filterCutoffLabel,   "CUTOFF");
-    setupKnob (filterResSlider,      filterResLabel,      "RESONANCE");
-    setupKnob (volumeSlider,         volumeLabel,         "VOLUME");
-    setupKnob (unisonVoicesSlider,   unisonVoicesLabel,   "VOICES");
-    setupKnob (unisonDetuneSlider,   unisonDetuneLabel,   "SPREAD");
-
-    // Voices snaps to integers — hide decimals
-    unisonVoicesSlider.setNumDecimalPlacesToDisplay (0);
+    setupKnob (driveSlider,    driveLabel,    "DRIVE");
+    setupKnob (attackSlider,   attackLabel,   "ATTACK");
+    setupKnob (decaySlider,    decayLabel,    "DECAY");
+    setupKnob (sustainSlider,  sustainLabel,  "SUSTAIN");
+    setupKnob (releaseSlider,  releaseLabel,  "RELEASE");
+    setupKnob (focusSlider,    focusLabel,    "FOCUS");
+    setupKnob (subBlendSlider, subBlendLabel, "SUB");
+    setupKnob (volumeSlider,   volumeLabel,   "VOLUME");
 
     // ---- Attachments ----
-    attackAtt        = std::make_unique<SliderAttach> (audioProcessor.apvts, "attack",          attackSlider);
-    decayAtt         = std::make_unique<SliderAttach> (audioProcessor.apvts, "decay",           decaySlider);
-    sustainAtt       = std::make_unique<SliderAttach> (audioProcessor.apvts, "sustain",         sustainSlider);
-    releaseAtt       = std::make_unique<SliderAttach> (audioProcessor.apvts, "release",         releaseSlider);
-    cutoffAtt        = std::make_unique<SliderAttach> (audioProcessor.apvts, "filterCutoff",    filterCutoffSlider);
-    resonanceAtt     = std::make_unique<SliderAttach> (audioProcessor.apvts, "filterResonance", filterResSlider);
-    volumeAtt        = std::make_unique<SliderAttach> (audioProcessor.apvts, "volume",          volumeSlider);
-    superSawDetuneAtt = std::make_unique<SliderAttach> (audioProcessor.apvts, "superSawDetune", superSawDetuneSlider);
-    unisonVoicesAtt  = std::make_unique<SliderAttach> (audioProcessor.apvts, "unisonVoices",   unisonVoicesSlider);
-    unisonDetuneAtt  = std::make_unique<SliderAttach> (audioProcessor.apvts, "unisonDetune",   unisonDetuneSlider);
+    driveAtt    = std::make_unique<SliderAttach> (audioProcessor.apvts, "drive",    driveSlider);
+    attackAtt   = std::make_unique<SliderAttach> (audioProcessor.apvts, "attack",   attackSlider);
+    decayAtt    = std::make_unique<SliderAttach> (audioProcessor.apvts, "decay",    decaySlider);
+    sustainAtt  = std::make_unique<SliderAttach> (audioProcessor.apvts, "sustain",  sustainSlider);
+    releaseAtt  = std::make_unique<SliderAttach> (audioProcessor.apvts, "release",  releaseSlider);
+    focusAtt    = std::make_unique<SliderAttach> (audioProcessor.apvts, "focus",    focusSlider);
+    subBlendAtt = std::make_unique<SliderAttach> (audioProcessor.apvts, "subBlend", subBlendSlider);
+    volumeAtt   = std::make_unique<SliderAttach> (audioProcessor.apvts, "volume",   volumeSlider);
 }
 
 SynthPluginAudioProcessorEditor::~SynthPluginAudioProcessorEditor() {}
@@ -95,16 +87,16 @@ void SynthPluginAudioProcessorEditor::paint (juce::Graphics& g)
     g.setColour (kSection);
     g.fillRoundedRectangle (  8.0f, 44.0f, 140.0f, 288.0f, 6.0f);  // Oscillator
     g.fillRoundedRectangle (156.0f, 44.0f, 198.0f, 288.0f, 6.0f);  // Envelope
-    g.fillRoundedRectangle (362.0f, 44.0f, 150.0f, 288.0f, 6.0f);  // Filter + Vol
-    g.fillRoundedRectangle (520.0f, 44.0f, 132.0f, 288.0f, 6.0f);  // Unison
+    g.fillRoundedRectangle (362.0f, 44.0f, 150.0f, 288.0f, 6.0f);  // Bass
+    g.fillRoundedRectangle (520.0f, 44.0f, 132.0f, 288.0f, 6.0f);  // Output
 
     // Section header text
     g.setColour (kAccent);
     g.setFont (juce::FontOptions{}.withHeight (10.0f).withStyle ("Bold"));
-    g.drawText ("OSCILLATOR",   juce::Rectangle<int> (  8, 44, 140, 18), juce::Justification::centred);
-    g.drawText ("ENVELOPE",     juce::Rectangle<int> (156, 44, 198, 18), juce::Justification::centred);
-    g.drawText ("FILTER / VOL", juce::Rectangle<int> (362, 44, 150, 18), juce::Justification::centred);
-    g.drawText ("UNISON",       juce::Rectangle<int> (520, 44, 132, 18), juce::Justification::centred);
+    g.drawText ("OSCILLATOR", juce::Rectangle<int> (  8, 44, 140, 18), juce::Justification::centred);
+    g.drawText ("ENVELOPE",   juce::Rectangle<int> (156, 44, 198, 18), juce::Justification::centred);
+    g.drawText ("BASS",       juce::Rectangle<int> (362, 44, 150, 18), juce::Justification::centred);
+    g.drawText ("OUTPUT",     juce::Rectangle<int> (520, 44, 132, 18), juce::Justification::centred);
 }
 
 void SynthPluginAudioProcessorEditor::resized()
@@ -114,20 +106,16 @@ void SynthPluginAudioProcessorEditor::resized()
     const int kW   = 78;  // knob width
     const int kGap = 6;
 
-    // ---- Oscillator section ----
+    // ---- Oscillator section (x=8, w=140) ----
     int oscX = 14;
     waveformLabel.setBounds (oscX, 64, 128, kH);
     waveformBox  .setBounds (oscX, 64 + kH + 2, 128, 28);
 
-    int volY = 64 + kH + 2 + 28 + 16;
-    volumeLabel .setBounds (oscX, volY,      kW, kH);
-    volumeSlider.setBounds (oscX, volY + kH, kW, kK);
+    int driveY = 64 + kH + 2 + 28 + 16;
+    driveLabel .setBounds (oscX, driveY,      kW, kH);
+    driveSlider.setBounds (oscX, driveY + kH, kW, kK);
 
-    int detuneY = volY + kH + kK + 6;
-    superSawDetuneLabel .setBounds (oscX, detuneY,      kW, kH);
-    superSawDetuneSlider.setBounds (oscX, detuneY + kH, kW, kK);
-
-    // ---- Envelope section (2×2 grid) ----
+    // ---- Envelope section (x=156, w=198) — 2×2 grid ----
     int envX1 = 162;
     int envX2 = envX1 + kW + kGap + 4;
     int envY1 = 64;
@@ -142,24 +130,20 @@ void SynthPluginAudioProcessorEditor::resized()
     releaseLabel .setBounds (envX2, envY2,      kW, kH);
     releaseSlider.setBounds (envX2, envY2 + kH, kW, kK);
 
-    // ---- Filter section (stacked) ----
-    int filtX  = 370;
-    int filtY1 = 64;
-    int filtY2 = filtY1 + kH + kK + 14;
+    // ---- Bass section (x=362, w=150) — stacked ----
+    int bassX  = 370;
+    int bassY1 = 64;
+    int bassY2 = bassY1 + kH + kK + 14;
 
-    filterCutoffLabel .setBounds (filtX, filtY1,      kW, kH);
-    filterCutoffSlider.setBounds (filtX, filtY1 + kH, kW, kK);
-    filterResLabel    .setBounds (filtX, filtY2,      kW, kH);
-    filterResSlider   .setBounds (filtX, filtY2 + kH, kW, kK);
+    focusLabel   .setBounds (bassX, bassY1,      kW, kH);
+    focusSlider  .setBounds (bassX, bassY1 + kH, kW, kK);
+    subBlendLabel.setBounds (bassX, bassY2,      kW, kH);
+    subBlendSlider.setBounds (bassX, bassY2 + kH, kW, kK);
 
-    // ---- Unison section (stacked) ----
-    // Centre knobs inside the 132px-wide section (x=520)
-    const int uniX  = 520 + (132 - kW) / 2;  // = 547
-    int uniY1 = 64;
-    int uniY2 = uniY1 + kH + kK + 14;
+    // ---- Output section (x=520, w=132) — volume centred ----
+    const int outX = 520 + (132 - kW) / 2;  // = 547
+    int outY = 64;
 
-    unisonVoicesLabel .setBounds (uniX, uniY1,      kW, kH);
-    unisonVoicesSlider.setBounds (uniX, uniY1 + kH, kW, kK);
-    unisonDetuneLabel .setBounds (uniX, uniY2,      kW, kH);
-    unisonDetuneSlider.setBounds (uniX, uniY2 + kH, kW, kK);
+    volumeLabel .setBounds (outX, outY,      kW, kH);
+    volumeSlider.setBounds (outX, outY + kH, kW, kK);
 }

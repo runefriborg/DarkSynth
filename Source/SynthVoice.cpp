@@ -1,17 +1,5 @@
 #include "SynthVoice.h"
 
-namespace {
-    // JP-8000 measured detune offsets, normalised so the outer pair = ±1.0
-    // (from Adam Szabo, "How to Emulate the Super Saw", 2010)
-    constexpr double kSuperSawDetuneRatios[7] = {
-        -1.00000, -0.57166, -0.17730,
-         0.0,
-         0.18102,  0.56516,  0.97688
-    };
-    // Maximum spread of the outer pair at detune = 1.0, in cents
-    constexpr double kSuperSawMaxDetuneCents = 50.0;
-}
-
 SynthVoice::SynthVoice() {}
 
 bool SynthVoice::canPlaySound (juce::SynthesiserSound* sound)
@@ -22,19 +10,20 @@ bool SynthVoice::canPlaySound (juce::SynthesiserSound* sound)
 void SynthVoice::startNote (int midiNoteNumber, float velocity,
                              juce::SynthesiserSound*, int)
 {
-    currentPhase  = 0.0;
-    level         = velocity * 0.8f;
+    currentPhase = 0.0;
+    subPhase     = 0.0;
+    level        = velocity * 0.8f;
 
-    // Apply per-voice unison pitch offset (set by UnisonSynthesiser before this call)
-    baseFrequency = juce::MidiMessage::getMidiNoteInHertz (midiNoteNumber)
-                    * std::pow (2.0, (double) unisonDetuneOffset / 12.0);
-    phaseDelta    = baseFrequency / getSampleRate() * juce::MathConstants<double>::twoPi;
+    baseFrequency = juce::MidiMessage::getMidiNoteInHertz (midiNoteNumber);
 
-    // Spread the 7 SuperSaw oscillators evenly across the cycle to avoid
-    // a phase-coherent click at note-on
-    for (int i = 0; i < kNumSuperSawOscs; ++i)
-        superSawPhases[i] = (double) i / kNumSuperSawOscs
-                            * juce::MathConstants<double>::twoPi;
+    double sr     = getSampleRate();
+    phaseDelta    = baseFrequency / sr * juce::MathConstants<double>::twoPi;
+    subDelta      = phaseDelta * 0.5;
+
+    // Key-track: set bandpass center to the note's frequency immediately
+    // so first block uses the correct frequency even before updateParams runs
+    double safeFreq = juce::jlimit (20.0, sr * 0.5 - 10.0, baseFrequency);
+    filter.setCutoffFrequency ((float) safeFreq);
 
     adsr.noteOn();
     filter.reset();
@@ -61,29 +50,24 @@ void SynthVoice::prepareToPlay (double sampleRate, int samplesPerBlock, int numC
     spec.numChannels      = (juce::uint32) numChannels;
 
     filter.prepare (spec);
-    filter.setType (juce::dsp::StateVariableTPTFilterType::lowpass);
-    filter.setCutoffFrequency (2000.0f);
-    filter.setResonance (0.7f);
+    filter.setType (juce::dsp::StateVariableTPTFilterType::bandpass);
+    filter.setCutoffFrequency (80.0f);
+    filter.setResonance (3.0f);
+
+    subSamples.resize ((size_t) samplesPerBlock, 0.0f);
+    adsrSamples.resize ((size_t) samplesPerBlock, 0.0f);
 
     isPrepared = true;
 }
 
 void SynthVoice::updateParams (const SynthParams& p)
 {
-    waveform      = p.waveform;
-    superSawDetune = p.superSawDetune;
+    if (getSampleRate() <= 0.0) return;
 
-    // Recompute per-oscillator phase deltas from the current base frequency and detune
-    double sr = getSampleRate();
-    if (sr > 0.0)
-    {
-        for (int i = 0; i < kNumSuperSawOscs; ++i)
-        {
-            double cents = kSuperSawDetuneRatios[i] * superSawDetune * kSuperSawMaxDetuneCents;
-            double freq  = baseFrequency * std::pow (2.0, cents / 1200.0);
-            superSawDeltas[i] = freq / sr * juce::MathConstants<double>::twoPi;
-        }
-    }
+    waveform  = p.waveform;
+    focus     = p.focus;
+    drive     = p.drive;
+    subBlend  = p.subBlend;
 
     adsrParams.attack  = p.attack;
     adsrParams.decay   = p.decay;
@@ -91,8 +75,10 @@ void SynthVoice::updateParams (const SynthParams& p)
     adsrParams.release = p.release;
     adsr.setParameters (adsrParams);
 
-    filter.setCutoffFrequency (juce::jlimit (20.0f, 20000.0f, p.filterCutoff));
-    filter.setResonance       (juce::jlimit (0.1f,  10.0f,    p.filterResonance));
+    double sr       = getSampleRate();
+    double safeFreq = juce::jlimit (20.0, sr * 0.5 - 10.0, baseFrequency);
+    filter.setCutoffFrequency ((float) safeFreq);
+    filter.setResonance (juce::jlimit (0.1f, 10.0f, focus));
 }
 
 float SynthVoice::generateSample() noexcept
@@ -101,39 +87,30 @@ float SynthVoice::generateSample() noexcept
 
     switch (waveform)
     {
-        case 0: // Sine
+        case 0: // Pure — clean sine
             sample = (float) std::sin (currentPhase);
             break;
 
-        case 1: // Sawtooth  (phase 0→2π maps to 1→-1)
-            sample = (float) (1.0 - currentPhase / juce::MathConstants<double>::pi);
-            break;
-
-        case 2: // Square
-            sample = currentPhase < juce::MathConstants<double>::pi ? 1.0f : -1.0f;
-            break;
-
-        case 3: // Triangle
+        case 1: // Soft — triangle (gentle odd harmonics)
         {
-            double t = currentPhase / juce::MathConstants<double>::twoPi; // 0..1
+            double t = currentPhase / juce::MathConstants<double>::twoPi;
             sample = (float) (t < 0.5 ? 4.0 * t - 1.0 : 3.0 - 4.0 * t);
             break;
         }
 
-        case 4: // SuperSaw — 7 detuned sawtooth oscillators (JP-8000 model)
+        case 2: // Warm — 0.85·sin(φ) + 0.15·sin(3φ)
+            sample = 0.85f * (float) std::sin (currentPhase)
+                   + 0.15f * (float) std::sin (3.0 * currentPhase);
+            break;
+
+        case 3: // Punch — square
+            sample = currentPhase < juce::MathConstants<double>::pi ? 1.0f : -1.0f;
+            break;
+
+        case 4: // Grit — hard-clipped sawtooth
         {
-            // Center oscillator (index 3) gets 2× weight to strengthen the fundamental
-            // and produce a darker, thicker tone. Total weight = 6×1 + 1×2 = 8.
-            float sum = 0.0f;
-            for (int i = 0; i < kNumSuperSawOscs; ++i)
-            {
-                float s = (float) (1.0 - superSawPhases[i] / juce::MathConstants<double>::pi);
-                sum += (i == 3) ? s * 2.0f : s;
-                superSawPhases[i] += superSawDeltas[i];
-                if (superSawPhases[i] >= juce::MathConstants<double>::twoPi)
-                    superSawPhases[i] -= juce::MathConstants<double>::twoPi;
-            }
-            sample = sum * (1.0f / 8.0f);
+            float saw = (float) (1.0 - currentPhase / juce::MathConstants<double>::pi);
+            sample = juce::jlimit (-0.7f, 0.7f, saw) / 0.7f;
             break;
         }
 
@@ -148,25 +125,43 @@ float SynthVoice::generateSample() noexcept
     return sample;
 }
 
+float SynthVoice::applyDrive (float x) const noexcept
+{
+    if (drive <= 0.0f) return x;
+    float k = 1.0f + drive * 4.0f;
+    return std::tanh (x * k) / std::tanh (k);
+}
+
 void SynthVoice::renderNextBlock (juce::AudioBuffer<float>& outputBuffer,
                                    int startSample, int numSamples)
 {
     if (!isPrepared || !isVoiceActive())
         return;
 
-    // Render into a temporary buffer so we can apply the per-voice filter
     juce::AudioBuffer<float> temp (outputBuffer.getNumChannels(), numSamples);
     temp.clear();
 
     bool stillActive = true;
 
+    // Zero out envelope and sub arrays so samples past the break point are silent
+    std::fill (adsrSamples.begin(), adsrSamples.begin() + numSamples, 0.0f);
+    std::fill (subSamples.begin(),  subSamples.begin()  + numSamples, 0.0f);
+
     for (int s = 0; s < numSamples; ++s)
     {
         float adsrVal = adsr.getNextSample();
-        float raw     = generateSample() * level * adsrVal;
+        adsrSamples[(size_t) s] = adsrVal;
 
+        // Main oscillator: waveform → drive → temp buffer (ADSR applied post-filter)
+        float raw = applyDrive (generateSample()) * level;
         for (int ch = 0; ch < temp.getNumChannels(); ++ch)
             temp.setSample (ch, s, raw);
+
+        // Sub oscillator: pure sine one octave below, stored separately
+        subSamples[(size_t) s] = (float) std::sin (subPhase) * level * adsrVal;
+        subPhase += subDelta;
+        if (subPhase >= juce::MathConstants<double>::twoPi)
+            subPhase -= juce::MathConstants<double>::twoPi;
 
         if (!adsr.isActive())
         {
@@ -175,14 +170,24 @@ void SynthVoice::renderNextBlock (juce::AudioBuffer<float>& outputBuffer,
         }
     }
 
-    // Apply low-pass filter
-    juce::dsp::AudioBlock<float>            block (temp);
+    // Apply key-tracked bandpass filter to main oscillator
+    juce::dsp::AudioBlock<float>              block (temp);
     juce::dsp::ProcessContextReplacing<float> ctx (block);
     filter.process (ctx);
 
-    // Mix into the host buffer
+    // JUCE bandpass peaks at Q × input; compensate so level stays consistent
+    float gainComp = 1.0f / juce::jmax (1.0f, focus);
+
+    // Mix filtered main (ADSR applied here, post-filter) + unfiltered sub into output
     for (int ch = 0; ch < outputBuffer.getNumChannels(); ++ch)
-        outputBuffer.addFrom (ch, startSample, temp, ch, 0, numSamples);
+    {
+        for (int s = 0; s < numSamples; ++s)
+        {
+            float out = temp.getSample (ch, s) * gainComp * adsrSamples[(size_t) s]
+                      + subBlend * subSamples[(size_t) s];
+            outputBuffer.addSample (ch, startSample + s, out);
+        }
+    }
 
     if (!stillActive)
         clearCurrentNote();

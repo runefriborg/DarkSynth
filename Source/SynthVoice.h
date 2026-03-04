@@ -1,17 +1,18 @@
 #pragma once
 #include <JuceHeader.h>
+#include <vector>
 
 // Parameters passed from processor to each voice each block
 struct SynthParams
 {
-    int   waveform        = 0;     // 0=Sine 1=Saw 2=Square 3=Triangle 4=SuperSaw
-    float attack          = 0.1f;
-    float decay           = 0.1f;
-    float sustain         = 0.8f;
-    float release         = 0.5f;
-    float filterCutoff    = 2000.0f;
-    float filterResonance = 0.7f;
-    float superSawDetune  = 0.3f;
+    int   waveform = 0;      // 0=Pure 1=Soft 2=Warm 3=Punch 4=Grit
+    float attack   = 0.01f;
+    float decay    = 0.30f;
+    float sustain  = 0.70f;
+    float release  = 0.20f;
+    float focus    = 3.0f;  // bandpass Q (1.0–8.0)
+    float drive    = 0.0f;  // tanh saturation (0.0–1.0)
+    float subBlend = 0.0f;  // sub-octave blend post-filter (0.0–1.0)
 };
 
 // ---- Sound (trivial – every note plays every sound) ----
@@ -33,9 +34,6 @@ public:
     void startNote (int midiNoteNumber, float velocity,
                     juce::SynthesiserSound*, int currentPitchWheelPosition) override;
 
-    // Called by UnisonSynthesiser before startNote to set per-voice pitch offset
-    void setUnisonDetuneOffset (float semitones) noexcept { unisonDetuneOffset = semitones; }
-
     void stopNote (float velocity, bool allowTailOff) override;
 
     void pitchWheelMoved (int)  override {}
@@ -49,20 +47,22 @@ public:
 
 private:
     float generateSample() noexcept;
+    float applyDrive (float x) const noexcept;
 
-    double currentPhase = 0.0;
-    double phaseDelta   = 0.0;
-    float  level        = 0.0f;
-    int    waveform     = 0;
+    double currentPhase  = 0.0;
+    double phaseDelta    = 0.0;
+    double subPhase      = 0.0;
+    double subDelta      = 0.0;
+    float  level         = 0.0f;
+    int    waveform      = 0;
+    double baseFrequency = 440.0;
 
-    float  unisonDetuneOffset = 0.0f;  // set by UnisonSynthesiser before startNote
+    float focus    = 3.0f;
+    float drive    = 0.0f;
+    float subBlend = 0.0f;
 
-    // SuperSaw: 7 detuned oscillators (JP-8000 model)
-    static constexpr int kNumSuperSawOscs = 7;
-    double superSawPhases[kNumSuperSawOscs] {};
-    double superSawDeltas[kNumSuperSawOscs] {};
-    float  superSawDetune = 0.3f;
-    double baseFrequency  = 440.0;
+    std::vector<float> subSamples;
+    std::vector<float> adsrSamples;
 
     juce::ADSR                               adsr;
     juce::ADSR::Parameters                   adsrParams;
